@@ -2,7 +2,7 @@
 
 微信读书书架自动整理 Skill — 让 AI 帮你把书架整理得井井有条。
 
-[![tests](https://github.com/tanyaqiong31029/weread-shelf-organizer/actions/workflows/test.yml/badge.svg)](https://github.com/tanyaqiong31029/weread-shelf-organizer/actions/workflows/test.yml)
+[![tests](https://github.com/tanyaqiongcode/weread-shelf-organizer/actions/workflows/test.yml/badge.svg)](https://github.com/tanyaqiongcode/weread-shelf-organizer/actions/workflows/test.yml)
 
 一个 [ZCode](https://zcode.ai) / Claude Code 风格的 Agent Skill：通过本机微信读书 Mac 客户端的
 登录凭据调用其书架接口，实现**分组的自动创建、书籍的批量归类、迁移后的自动核验**。
@@ -47,11 +47,11 @@
 
 ```bash
 # ZCode
-git clone https://github.com/tanyaqiong31029/weread-shelf-organizer.git \
+git clone https://github.com/tanyaqiongcode/weread-shelf-organizer.git \
   ~/.agents/skills/weread-shelf-organizer
 
 # Claude Code
-git clone https://github.com/tanyaqiong31029/weread-shelf-organizer.git \
+git clone https://github.com/tanyaqiongcode/weread-shelf-organizer.git \
   ~/.claude/skills/weread-shelf-organizer
 ```
 
@@ -63,10 +63,10 @@ git clone https://github.com/tanyaqiong31029/weread-shelf-organizer.git \
 
 ```bash
 # 方式 A: pip 安装（提供 weread-shelf 全局命令, requires-python >= 3.9）
-pip install git+https://github.com/tanyaqiong31029/weread-shelf-organizer.git
+pip install git+https://github.com/tanyaqiongcode/weread-shelf-organizer.git
 
 # pip 安装只包含 CLI, 不含 examples/; 先下载示例规则再按需修改
-curl -LO https://raw.githubusercontent.com/tanyaqiong31029/weread-shelf-organizer/main/examples/rules.example.json
+curl -LO https://raw.githubusercontent.com/tanyaqiongcode/weread-shelf-organizer/main/examples/rules.example.json
 
 weread-shelf creds
 weread-shelf plan --rules rules.example.json -o plan.json --dry-run
