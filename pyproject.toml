@@ -30,7 +30,7 @@ description = "微信读书书架自动整理 Skill — 重组(白名单确认)/
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "tanyaqiong31029" }]
+authors = [{ name = "tanyaqiongcode" }]
 keywords = ["weread", "wechat-reading", "shelf", "agent-skill", "automation"]
 classifiers = [
   "Programming Language :: Python :: 3",
