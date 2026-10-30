@@ -114,23 +114,28 @@ python3 weread_shelf.py apply --plan plan.json --yes --json-report report.json
 python3 -m unittest discover -s tests -v
 ```
 
-44 个离线回归测试（全 mock、无网络，有状态假书架模拟迁移后同步）：classify 元数一致性、
+58 个离线回归测试（全 mock、无网络，有状态假书架模拟迁移后同步）：classify 元数一致性、
 含待复核书的端到端 plan、置信度阈值分流、正确分组核验、重组白名单边界、执行前状态校验、
-核验失败非零退出、`--json-report` 结构化报告、环境变量凭据、批次切分、基线解析等。
+核验失败非零退出、`--json-report` 结构化报告、环境变量凭据、批次切分、基线解析、
+删除前的 archiveId/空组二次核验、逐批原子检查点、非 401 中断报告、脱敏接口样例等。
 推送后由 GitHub Actions 自动执行。
+
+`tests/fixtures/` 的脱敏响应样例用于锁定已知接口字段与安全分支；**它不能单独发现上游
+接口变化**，真实变化仍依赖每周 `sync` 与迁移后 `verify` 的显式报告。
 
 完整安全重组流程见 [docs/walkthrough.md](docs/walkthrough.md)。
 
 **自动化集成**：`apply`/`review` 的退出码 — `0` 成功；`1` 存在迁移失败或核验错位；
 `2` 凭据失效；`3` 重组迁移未加 `--yes`。配合 `--json-report` 可获得结构化的
-moved/failed/stale/wrong 结果，定时任务据此判断成败。
+moved/failed/stale/wrong 结果；报告每批原子更新，并带 `in_progress` / `interrupted` /
+`error` 字段，进程中断或核验异常时仍保留已完成进度，便于续作与审计。
 
 ## 🛡️ 安全设计
 
 - 默认只移动「未分组」的书 — 你手动放入其他分组的书永远不会被碰；重组模式只动你显式指定的来源分组，且必须 `--yes` 确认
 - **执行前强制重校验** — `apply`/`review` 重新同步书架，逐本核对当前分组与计划一致，状态不符自动跳过（过期/被篡改的计划无法越线）
 - 不删除书籍、不移出书架、不改变私密状态、不动专辑与文章收藏
-- 删除分组只删空分组，且 `removeBooks: 0`（书永远保留在书架）
+- 删除分组只删空分组，且 `removeBooks: 0`（书永远保留在书架）；删除前重新同步核对 archiveId/名称/是否仍为空，快照过期或期间加入书籍则跳过
 - 先 `--dry-run` 出计划再执行；每批 40 本、失败重试、迁移后核验
 
 ## ⚠️ 免责声明

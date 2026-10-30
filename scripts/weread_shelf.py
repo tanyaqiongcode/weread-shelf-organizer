@@ -33,6 +33,7 @@ import random
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -456,9 +457,10 @@ def _move_batch(hdrs, ids, gid, gname):
     return False, detail
 
 
-def _do_moves(hdrs, by_group, aid, moved=None, failed=None, batches=None):
+def _do_moves(hdrs, by_group, aid, moved=None, failed=None, batches=None, on_batch=None):
     """逐批迁移。moved/failed/batches 可由调用方传入并就地追加:
-    凭据失效(CredentialsExpiredError)中断时, 调用方仍持有已完成批次的进度。"""
+    凭据失效(CredentialsExpiredError)或异常中断时, 调用方仍持有已完成批次的进度。
+    on_batch: 每写完一个批次条目后回调(用于原子落盘检查点)。"""
     moved = [] if moved is None else moved
     failed = [] if failed is None else failed
     batches = [] if batches is None else batches
@@ -468,6 +470,8 @@ def _do_moves(hdrs, by_group, aid, moved=None, failed=None, batches=None):
             log(f"❌ 分组不存在: {g} ({len(ids)} 本未移动), 先用 groups --create 创建")
             failed.extend(ids)
             batches.append({"group": g, "books": len(ids), "ok": False, "reason": "group_missing"})
+            if on_batch:
+                on_batch()
             continue
         for i in range(0, len(ids), BATCH):
             chunk = ids[i : i + BATCH]
@@ -482,6 +486,8 @@ def _do_moves(hdrs, by_group, aid, moved=None, failed=None, batches=None):
             else:
                 failed.extend(chunk)
                 log(f"  ❌ 批次失败 {len(chunk)} 本")
+            if on_batch:
+                on_batch()
             time.sleep(0.4)
     return moved, failed, batches
 
@@ -522,7 +528,32 @@ def plan_age_hours(plan):
 
 
 def _write_json_report(path, data):
-    Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    """原子写入 JSON 报告: 同目录临时文件 + os.replace。
+
+    进程在写入中途被中断时, 目标文件要么是上一版完整报告, 要么是新一版,
+    不会留下半截 JSON。
+    """
+    p = Path(path)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=p.parent,
+            prefix=f".{p.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            tmp_path = Path(f.name)
+            json.dump(data, f, ensure_ascii=False, indent=1)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, p)
+        tmp_path = None
+    finally:
+        if tmp_path is not None:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
     log(f"结构化报告 → {path}")
 
 
@@ -571,8 +602,36 @@ def cmd_apply(args):
         by_group.setdefault(m["to"], []).append(m["bookId"])
     pending = [m["bookId"] for m in valid]
     moved, failed, batches = [], [], []
+    progress_path = args.json_report
+
+    def report_payload(*, in_progress, interrupted=False, error=None, wrong=()):
+        payload = {
+            "command": "apply",
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "plan_id": plan.get("plan_id"),
+            "batch_id": batch_id,
+            "in_progress": in_progress,
+            "interrupted": interrupted,
+            "planned": len(plan["moves"]),
+            "moved": sorted(moved),
+            "failed": sorted(failed),
+            "stale": [
+                {"bookId": m["bookId"], "planned_from": m.get("from"), "actual_group": now}
+                for m, now in stale
+            ],
+            "wrong": [{"bookId": b, "expected": w, "actual": g} for b, w, g in wrong],
+            "batches": batches,
+        }
+        if error:
+            payload["error"] = error
+        return payload
+
+    def checkpoint():
+        if progress_path:
+            _write_json_report(progress_path, report_payload(in_progress=True))
+
     try:
-        _do_moves(hdrs, by_group, aid, moved, failed, batches)
+        _do_moves(hdrs, by_group, aid, moved, failed, batches, on_batch=checkpoint)
     except CredentialsExpiredError as e:
         attempted = {b for b in moved} | set(failed)
         failed = list(dict.fromkeys(failed + [b for b in pending if b not in attempted]))
@@ -580,28 +639,28 @@ def cmd_apply(args):
             {"group": "*", "books": len(failed), "ok": False, "error": f"credentials_expired: {e}"}
         )
         _write_json_report(
-            args.json_report or "apply_interrupted.json",
-            {
-                "command": "apply",
-                "generated_at": datetime.now().isoformat(timespec="seconds"),
-                "plan_id": plan.get("plan_id"),
-                "batch_id": batch_id,
-                "interrupted": True,
-                "planned": len(plan["moves"]),
-                "moved": sorted(moved),
-                "failed": sorted(failed),
-                "stale": [
-                    {"bookId": m["bookId"], "planned_from": m.get("from"), "actual_group": now}
-                    for m, now in stale
-                ],
-                "wrong": [],
-                "batches": batches,
-            },
+            progress_path or "apply_interrupted.json",
+            report_payload(in_progress=False, interrupted=True, error=f"credentials_expired: {e}"),
         )
         print("FATAL: 凭据失效, 进度已写入报告; 重新登录后重跑即可续传", file=sys.stderr)
         sys.exit(2)
+    except BaseException as e:
+        _write_json_report(
+            progress_path or "apply_interrupted.json",
+            report_payload(in_progress=False, interrupted=True, error=f"{type(e).__name__}: {e}"),
+        )
+        raise
     expected = {m["bookId"]: m["to"] for m in valid}
-    wrong = _verify(hdrs, {b: expected[b] for b in moved})
+    try:
+        wrong = _verify(hdrs, {b: expected[b] for b in moved})
+    except BaseException as e:
+        _write_json_report(
+            progress_path or "apply_interrupted.json",
+            report_payload(
+                in_progress=False, interrupted=True, error=f"verify: {type(e).__name__}: {e}"
+            ),
+        )
+        raise
     log(
         f"迁移完成: 成功 {len(moved)} 本, 失败 {len(failed)} 本, "
         f"跳过状态不符 {len(stale)} 本, 核验错位 {len(wrong)} 本"
@@ -609,24 +668,7 @@ def cmd_apply(args):
     for b, want, got in wrong[:10]:
         log(f"  ⚠️ {b[:8]} 期望「{want}」实际「{got}」")
     if args.json_report:
-        _write_json_report(
-            args.json_report,
-            {
-                "command": "apply",
-                "generated_at": datetime.now().isoformat(timespec="seconds"),
-                "plan_id": plan.get("plan_id"),
-                "batch_id": batch_id,
-                "planned": len(plan["moves"]),
-                "moved": sorted(moved),
-                "batches": batches,
-                "failed": sorted(failed),
-                "stale": [
-                    {"bookId": m["bookId"], "planned_from": m.get("from"), "actual_group": now}
-                    for m, now in stale
-                ],
-                "wrong": [{"bookId": b, "expected": w, "actual": g} for b, w, g in wrong],
-            },
-        )
+        _write_json_report(args.json_report, report_payload(in_progress=False, wrong=wrong))
     if failed or wrong:
         log("❌ 存在失败或核验错位, 以非零退出码结束 (细节见上方日志/报告)")
         sys.exit(1)
@@ -668,8 +710,32 @@ def cmd_review(args):
     batch_id = uuid.uuid4().hex[:8]
     log(f"批次 {batch_id} 开始 ({len(kept)} 本)")
     moved, move_failed, batches = [], [], []
+    progress_path = args.json_report
+
+    def report_payload(*, in_progress, interrupted=False, error=None, wrong=()):
+        payload = {
+            "command": "review",
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "batch_id": batch_id,
+            "in_progress": in_progress,
+            "interrupted": interrupted,
+            "planned": len(decisions),
+            "moved": sorted(moved),
+            "failed": sorted(dict.fromkeys(failed + move_failed)),
+            "stale": skipped,
+            "wrong": [{"bookId": b, "expected": w, "actual": g} for b, w, g in wrong],
+            "batches": batches,
+        }
+        if error:
+            payload["error"] = error
+        return payload
+
+    def checkpoint():
+        if progress_path:
+            _write_json_report(progress_path, report_payload(in_progress=True))
+
     try:
-        _do_moves(hdrs, by_group, aid, moved, move_failed, batches)
+        _do_moves(hdrs, by_group, aid, moved, move_failed, batches, on_batch=checkpoint)
     except CredentialsExpiredError as e:
         attempted = {b for b in moved} | set(move_failed) | set(failed)
         remaining = [str(d["bookId"]) for d in kept if str(d["bookId"]) not in attempted]
@@ -683,25 +749,29 @@ def cmd_review(args):
             }
         )
         _write_json_report(
-            args.json_report or "review_interrupted.json",
-            {
-                "command": "review",
-                "generated_at": datetime.now().isoformat(timespec="seconds"),
-                "batch_id": batch_id,
-                "interrupted": True,
-                "planned": len(decisions),
-                "moved": sorted(moved),
-                "failed": sorted(dict.fromkeys(failed + move_failed)),
-                "stale": skipped,
-                "wrong": [],
-                "batches": batches,
-            },
+            progress_path or "review_interrupted.json",
+            report_payload(in_progress=False, interrupted=True, error=f"credentials_expired: {e}"),
         )
         print("FATAL: 凭据失效, 进度已写入报告; 重新登录后重跑即可续传", file=sys.stderr)
         sys.exit(2)
+    except BaseException as e:
+        _write_json_report(
+            progress_path or "review_interrupted.json",
+            report_payload(in_progress=False, interrupted=True, error=f"{type(e).__name__}: {e}"),
+        )
+        raise
     failed = list(dict.fromkeys(failed + move_failed))
     expected = {str(d["bookId"]): d["group"] for d in kept}
-    wrong = _verify(hdrs, {b: expected[b] for b in moved})
+    try:
+        wrong = _verify(hdrs, {b: expected[b] for b in moved})
+    except BaseException as e:
+        _write_json_report(
+            progress_path or "review_interrupted.json",
+            report_payload(
+                in_progress=False, interrupted=True, error=f"verify: {type(e).__name__}: {e}"
+            ),
+        )
+        raise
     log(
         f"复核应用完成: 移动 {len(moved)} 本, 失败 {len(failed)}, "
         f"跳过状态不符 {skipped}, 核验错位 {len(wrong)}"
@@ -709,23 +779,33 @@ def cmd_review(args):
     for b, want, got in wrong[:10]:
         log(f"  ⚠️ {b[:8]} 期望「{want}」实际「{got}」")
     if args.json_report:
-        _write_json_report(
-            args.json_report,
-            {
-                "command": "review",
-                "generated_at": datetime.now().isoformat(timespec="seconds"),
-                "batch_id": batch_id,
-                "planned": len(decisions),
-                "batches": batches,
-                "moved": sorted(moved),
-                "failed": sorted(failed),
-                "stale": skipped,
-                "wrong": [{"bookId": b, "expected": w, "actual": g} for b, w, g in wrong],
-            },
-        )
+        _write_json_report(args.json_report, report_payload(in_progress=False, wrong=wrong))
     if failed or wrong:
         log("❌ 存在失败或核验错位, 以非零退出码结束 (细节见上方日志/报告)")
         sys.exit(1)
+
+
+def _delete_archive_verified(hdrs, name, archive_id, *, require_empty):
+    """删除分组前重新同步, 核对 archiveId + 名称 (+ 仍为空)。
+
+    调用方持有的分组快照可能已过期: 期间用户可能向"空组"加入书籍,
+    或分组被改名/删除/重建。删除属不可逆操作, 必须在删除前复核,
+    不能直接信任旧快照。
+    """
+    shelf = sync_shelf(hdrs)
+    current = next((a for a in shelf.get("archive", []) if a.get("archiveId") == archive_id), None)
+    if current is None or current.get("name") != name:
+        log(f"⏭️ 跳过删除「{name}」: 分组已删除、重建或 archiveId/名称已变化")
+        return False
+    ids = current.get("bookIds", [])
+    if require_empty and ids:
+        log(f"⏭️ 跳过删除「{name}」: 删除前复核发现 {len(ids)} 本书, 不再视为空组")
+        return False
+    resp = http_json(
+        f"{API}/shelf/deleteArchive", {"archiveId": archive_id, "removeBooks": 0}, hdrs
+    )
+    log(f"删除分组「{name}」: {resp} (书籍保留在书架)")
+    return True
 
 
 def cmd_groups(args):
@@ -755,20 +835,15 @@ def cmd_groups(args):
                 f"如确认要连同分组删除请加 --force (书不会被移出书架, 只解除分组)"
             )
             return
-        resp = http_json(
-            f"{API}/shelf/deleteArchive", {"archiveId": a["archiveId"], "removeBooks": 0}, hdrs
-        )
-        log(f"删除分组「{args.delete}」: {resp} (书籍保留在书架)")
+        _delete_archive_verified(hdrs, args.delete, a["archiveId"], require_empty=not args.force)
     elif args.purge_empty:
         n = 0
         for name, a in sorted(archives.items()):
-            if name != "归档" and not a.get("bookIds"):
-                resp = http_json(
-                    f"{API}/shelf/deleteArchive",
-                    {"archiveId": a["archiveId"], "removeBooks": 0},
-                    hdrs,
-                )
-                log(f"🗑️ 删除空分组: {name} => {resp}")
+            if (
+                name != "归档"
+                and not a.get("bookIds")
+                and _delete_archive_verified(hdrs, name, a["archiveId"], require_empty=True)
+            ):
                 n += 1
                 time.sleep(0.4)
         log(f"共清理 {n} 个空分组")

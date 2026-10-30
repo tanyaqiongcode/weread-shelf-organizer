@@ -9,7 +9,7 @@
 ```bash
 uvx ruff check . && uvx ruff format --check .    # lint（保持 0 问题）
 uvx mypy .                                       # 类型检查（保持 0 错误）
-python3 -m unittest discover -s tests            # 44 个离线回归测试，必须全绿
+python3 -m unittest discover -s tests            # 58 个离线回归测试，必须全绿
 pre-commit run --all-files                       # 提交前全量自检
 ```
 

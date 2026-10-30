@@ -1,0 +1,27 @@
+{
+ "books": [
+  {
+   "bookId": "1001",
+   "title": "示例书",
+   "author": "示例作者",
+   "category": "文学-散文杂著",
+   "secret": 0,
+   "finishReading": 0,
+   "readUpdateTime": 0
+  }
+ ],
+ "archive": [
+  {
+   "name": "归档",
+   "archiveId": 1,
+   "bookIds": ["1002"]
+  },
+  {
+   "name": "07 中文文学",
+   "archiveId": 7007,
+   "bookIds": ["1001"]
+  }
+ ],
+ "albums": [],
+ "mp": false
+}

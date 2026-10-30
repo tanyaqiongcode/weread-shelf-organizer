@@ -496,6 +496,107 @@ class ApplySafetyTests(unittest.TestCase):
         self.assertEqual(report["wrong"], [])
 
 
+class ProgressReportTests(unittest.TestCase):
+    """回归: 报告原子写入 + 每批检查点 + 非预期中断仍保留已完成进度。"""
+
+    @staticmethod
+    def _write_plan(directory, count=85, to="A"):
+        moves = [
+            {
+                "bookId": str(i),
+                "title": f"书{i}",
+                "from": None,
+                "to": to,
+                "basis": "t",
+                "confidence": 1.0,
+            }
+            for i in range(count)
+        ]
+        p = Path(directory) / "plan.json"
+        p.write_text(
+            json.dumps({"generated_at": datetime.now().isoformat(), "moves": moves}),
+            encoding="utf-8",
+        )
+        return str(p)
+
+    def test_atomic_report_keeps_previous_version_on_write_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            rp = Path(d) / "report.json"
+            W._write_json_report(str(rp), {"version": 1})
+            with mock.patch.object(W.json, "dump", side_effect=RuntimeError("disk full")):
+                with self.assertRaises(RuntimeError):
+                    W._write_json_report(str(rp), {"version": 2})
+            self.assertEqual(json.loads(rp.read_text(encoding="utf-8"))["version"], 1)
+            self.assertEqual(list(Path(d).glob(f".{rp.name}.*.tmp")), [])
+
+    def test_apply_writes_checkpoint_after_each_batch(self):
+        with tempfile.TemporaryDirectory() as d:
+            plan_path = self._write_plan(d, 85)
+            rp = Path(d) / "report.json"
+            fs = FakeShelf({"A": (1, [])})
+            writes = []
+            real_write = W._write_json_report
+
+            def spy(path, data):
+                writes.append(json.loads(json.dumps(data, ensure_ascii=False)))
+                real_write(path, data)
+
+            def fake_http(url, payload=None, hdrs=None, timeout=30):
+                if payload and "bookIds" in payload:
+                    fs.apply_move(payload["bookIds"], payload["name"])
+                return {"succ": 1}
+
+            with (
+                mock.patch.object(W, "get_cred", return_value=CRED),
+                mock.patch.object(W, "sync_shelf", side_effect=lambda *a, **k: fs.shelf()),
+                mock.patch.object(W, "http_json", side_effect=fake_http),
+                mock.patch.object(W.time, "sleep"),
+                mock.patch.object(W, "_write_json_report", side_effect=spy),
+            ):
+                W.cmd_apply(ns(plan=plan_path, dry_run=False, yes=False, json_report=str(rp)))
+            self.assertEqual([w["in_progress"] for w in writes], [True, True, True, False])
+            report = json.loads(rp.read_text(encoding="utf-8"))
+            self.assertEqual(len(report["moved"]), 85)
+            self.assertEqual([b["books"] for b in report["batches"]], [40, 40, 5])
+            self.assertFalse(report["in_progress"])
+
+    def test_apply_unexpected_interrupt_writes_progress_report(self):
+        """非 401 的中断(如 Ctrl-C)也必须落盘已完成进度, 再原样抛出。"""
+
+        def boom(hdrs, by_group, aid, moved=None, failed=None, batches=None, on_batch=None):
+            moved.extend(["1"])
+            failed.extend(["2"])
+            batches.append({"group": "A", "books": 1, "ok": True})
+            if on_batch:
+                on_batch()
+            raise KeyboardInterrupt("stop")
+
+        with tempfile.TemporaryDirectory() as d:
+            plan_path = self._write_plan(d, 2)
+            rp = Path(d) / "report.json"
+            with (
+                mock.patch.object(W, "get_cred", return_value=CRED),
+                mock.patch.object(
+                    W,
+                    "sync_shelf",
+                    return_value={
+                        "books": [],
+                        "archive": [{"name": "A", "archiveId": 1, "bookIds": []}],
+                    },
+                ),
+                mock.patch.object(W, "_do_moves", side_effect=boom),
+                mock.patch.object(W.time, "sleep"),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    W.cmd_apply(ns(plan=plan_path, dry_run=False, yes=False, json_report=str(rp)))
+            report = json.loads(rp.read_text(encoding="utf-8"))
+            self.assertTrue(report["interrupted"])
+            self.assertFalse(report["in_progress"])
+            self.assertEqual(report["moved"], ["1"])
+            self.assertEqual(report["failed"], ["2"])
+            self.assertIn("KeyboardInterrupt", report["error"])
+
+
 class ReviewSafetyTests(unittest.TestCase):
     """安全回归: review 决定执行前校验当前分组状态, 核验失败非零退出。"""
 
@@ -633,6 +734,75 @@ class ArchiveGroupTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["bookIds"], ["9"])
         self.assertEqual(fs.g["01 成长学习"]["ids"], ["9"])
+
+
+class GroupSafetyTests(unittest.TestCase):
+    """回归: 删除分组前必须重新同步, 核对 archiveId/名称/(可选)是否仍为空。"""
+
+    CRED = {"vid": "1", "skey": "s", "v": "1", "ua": "u"}
+
+    @staticmethod
+    def _shelf(*groups):
+        return {
+            "books": [],
+            "archive": [{"name": n, "archiveId": i, "bookIds": list(ids)} for n, i, ids in groups],
+        }
+
+    def _run_groups(self, args, *snapshots):
+        with (
+            mock.patch.object(W, "get_cred", return_value=self.CRED),
+            mock.patch.object(W, "sync_shelf", side_effect=list(snapshots)),
+            mock.patch.object(W, "http_json", return_value={"succ": 1}) as hj,
+            mock.patch.object(W.time, "sleep"),
+        ):
+            W.cmd_groups(args)
+        return hj
+
+    @staticmethod
+    def _delete_args(name, force=False):
+        return ns(create=None, delete=name, force=force, purge_empty=False, list=False)
+
+    def test_purge_skips_group_that_became_non_empty(self):
+        """快照里的空组在删除前复核时已有书 → 不得发删除请求。"""
+        initial = self._shelf(("临时空组", 9009, []))
+        fresh = self._shelf(("临时空组", 9009, ["1"]))
+        hj = self._run_groups(
+            ns(create=None, delete=None, force=False, purge_empty=True, list=False),
+            initial,
+            fresh,
+        )
+        hj.assert_not_called()
+
+    def test_delete_skips_when_archive_id_changed(self):
+        """分组被删除后重建(名称相同、ID 不同) → 不得按旧 ID 删除。"""
+        hj = self._run_groups(
+            self._delete_args("临时空组"),
+            self._shelf(("临时空组", 9009, [])),
+            self._shelf(("临时空组", 9010, [])),
+        )
+        hj.assert_not_called()
+
+    def test_delete_empty_group_rechecks_then_uses_remove_books_zero(self):
+        shelf = self._shelf(("临时空组", 9009, []))
+        hj = self._run_groups(self._delete_args("临时空组"), shelf, shelf)
+        hj.assert_called_once()
+        self.assertTrue(hj.call_args.args[0].endswith("/shelf/deleteArchive"))
+        self.assertEqual(hj.call_args.args[1], {"archiveId": 9009, "removeBooks": 0})
+
+    def test_force_delete_revalidates_identity(self):
+        """--force 允许非空组删除, 但仍须核对 archiveId/名称, 防止误删重建后的同名组。"""
+        hj = self._run_groups(
+            self._delete_args("临时非空组", force=True),
+            self._shelf(("临时非空组", 9009, ["1"])),
+            self._shelf(("临时非空组", 9010, ["1"])),
+        )
+        hj.assert_not_called()
+
+    def test_force_delete_keeps_books_on_shelf(self):
+        shelf = self._shelf(("临时非空组", 9009, ["1"]))
+        hj = self._run_groups(self._delete_args("临时非空组", force=True), shelf, shelf)
+        hj.assert_called_once()
+        self.assertEqual(hj.call_args.args[1], {"archiveId": 9009, "removeBooks": 0})
 
 
 class HttpBackoffTests(unittest.TestCase):
@@ -873,6 +1043,75 @@ class CrossPlatformCredTests(unittest.TestCase):
         self._assert_fatal_exit(
             {"WEREAD_VID": "12345678", "WEREAD_SKEY": "abcDEF12"}, TimeoutError("timed out")
         )
+
+
+class ContractFixtureTests(unittest.TestCase):
+    """接口契约: 脱敏响应样例锁定已知字段与安全分支。
+
+    注意: 样例只能防止解析/分支回归, 不能单独发现上游接口变化;
+    真实变化仍依赖每周 sync 与迁移后 verify。
+    """
+
+    FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+    def _json(self, name):
+        return json.loads((self.FIXTURES / name).read_text(encoding="utf-8"))
+
+    def test_sync_fixture_drives_snapshot_and_group_split(self):
+        shelf = self._json("sync_minimal.json")
+        self.assertEqual(W.snapshot_current(shelf), {"1001": "07 中文文学"})
+        aid, in_target, in_custom = W.split_groups(shelf, {"07 中文文学"})
+        self.assertEqual(aid, {"归档": 1, "07 中文文学": 7007})
+        self.assertEqual(in_target, {"1001"})
+        self.assertEqual(in_custom, {})
+
+    def test_sync_empty_response_degrades_safely(self):
+        self.assertEqual(W.snapshot_current({}), {})
+        self.assertEqual(W.split_groups({}, {"A"}), ({}, set(), {}))
+
+    def test_archive_success_fixture_is_accepted(self):
+        with mock.patch.object(W, "http_json", return_value=self._json("archive_succ.json")):
+            ok, err = W._move_batch({"vid": "1"}, ["1"], 7007, "07 中文文学")
+        self.assertTrue(ok)
+        self.assertEqual(err, "")
+
+    def test_archive_error_fixture_is_rejected(self):
+        with (
+            mock.patch.object(W, "http_json", return_value=self._json("archive_rate_limited.json")),
+            mock.patch.object(W.time, "sleep"),
+        ):
+            ok, err = W._move_batch({"vid": "1"}, ["1"], 7007, "07 中文文学")
+        self.assertFalse(ok)
+        self.assertIn("请求过于频繁", err)
+
+    def test_delete_archive_fixture_with_reverified_empty_group(self):
+        shelf = self._json("sync_delete_candidate.json")
+        with (
+            mock.patch.object(W, "sync_shelf", return_value=shelf),
+            mock.patch.object(
+                W, "http_json", return_value=self._json("delete_archive_succ.json")
+            ) as hj,
+        ):
+            ok = W._delete_archive_verified({"vid": "1"}, "临时空组", 9009, require_empty=True)
+        self.assertTrue(ok)
+        self.assertEqual(hj.call_args.args[1], {"archiveId": 9009, "removeBooks": 0})
+
+    def test_non_json_response_is_rejected(self):
+        body = (self.FIXTURES / "sync_non_json.txt").read_bytes()
+
+        class BadResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return body
+
+        with mock.patch("urllib.request.urlopen", return_value=BadResp()):
+            with self.assertRaises(json.JSONDecodeError):
+                W.http_json("https://example.invalid/", hdrs={})
 
 
 if __name__ == "__main__":

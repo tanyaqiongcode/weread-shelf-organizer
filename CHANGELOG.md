@@ -4,16 +4,28 @@
 
 ## [Unreleased]
 
+### 安全
+- **删除分组前二次核验**: `groups --delete` / `--purge-empty` 不再信任启动时的快照,
+  每次删除前重新同步并核对 archiveId + 分组名 (+ 是否仍为空); 期间加入书籍、分组改名/
+  删除/重建时跳过删除。`--force` 允许非空组删除, 但仍核对 archiveId/名称。
+
 ### 修复
 - **中断报告保留已完成批次**: 凭据失效时 apply/review 的报告此前 moved=0、全部记为 failed;
   现 `_do_moves` 就地追加调用方传入的进度列表, 报告如实反映已完成批次
+- **报告原子写入 + 逐批检查点**: `--json-report` 改为同目录临时文件 + `os.replace`,
+  每批结束即落盘; 进程中断不会留下半截 JSON, 已完成进度可追溯
+- **非 401 中断同样保留进度**: Ctrl-C/意外异常先写 `interrupted` 报告再原样抛出;
+  核验阶段异常也会落盘已完成的迁移结果
 - **跨平台凭据**: 非 macOS 无 `open` 命令不再抛 FileNotFoundError; 环境变量凭据校验遇
   URLError/超时也不再 traceback, 统一以 FATAL + 退出码 2 结束
 - `apply --dry-run` 不再获取凭据/启动客户端; `groups --list` 帮助文本与行为对齐
 
 ### 工程
-- 单测矩阵覆盖 Python 3.9 / 3.11 / 3.13; 测试 35 → 44 项
-- README pip 安装说明补充示例规则下载; AGENTS.md 去除不存在的 scripts/plan.json
+- 单测矩阵覆盖 Python 3.9 / 3.11 / 3.13; 测试 44 → 58 项
+- 新增 `tests/fixtures/` 脱敏接口样例（sync/archive/deleteArchive/非 JSON），
+  覆盖删除前复核、原子报告、逐批检查点与非 401 中断分支
+- README pip 安装说明补充示例规则下载; AGENTS.md 去除不存在的 scripts/plan.json、
+  同步测试数与新增安全说明
 
 ## [1.2.1] - 2026-09-06
 

@@ -1,0 +1,17 @@
+{
+ "books": [],
+ "archive": [
+  {
+   "name": "归档",
+   "archiveId": 1,
+   "bookIds": []
+  },
+  {
+   "name": "临时空组",
+   "archiveId": 9009,
+   "bookIds": []
+  }
+ ],
+ "albums": [],
+ "mp": false
+}
