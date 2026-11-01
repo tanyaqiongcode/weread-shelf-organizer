@@ -5,20 +5,22 @@
 
 ## 认证
 
-所有请求携带请求头（从本机客户端日志提取，见 `weread_shelf.py extract_cred()`）：
+所有请求携带请求头（Windows 从 `WEREAD_COOKIE` / 环境变量读取；macOS `main` 分支从客户端日志提取）：
 
 ```
 vid:  用户数字 ID（8 位左右）
-skey: 会话密钥（8 字符左右，服务端约数天过期，客户端启动时自动续期）
+skey: 会话密钥（会过期，时长以服务端为准）
 v:    客户端版本号，如 10.2.1.87
 User-Agent: WeRead/10.2.1 (iPad; iOS 26.5; Scale/2.00)
 Content-Type: application/json
 ```
 
-- Mac 客户端（App Store 版）日志目录：
-  `~/Library/Containers/com.tencent.weread/Data/Documents/log/*.log`
+- **Windows（推荐）**：浏览器登录 <https://weread.qq.com>，从 Cookies 复制 `wr_vid` / `wr_skey`，
+  设置 `WEREAD_COOKIE="wr_vid=...; wr_skey=..."`；也可分开设置 `WEREAD_VID` / `WEREAD_SKEY`。
+- **macOS（`main` 分支）**：客户端日志目录
+  `~/Library/Containers/com.tencent.weread/Data/Documents/log/*.log`，
   每次启动生成新日志，含 `skey = xxx; v = "x.x.x"; vid = xxx` 的账号信息 dump。
-- skey 过期（HTTP 401 / errcode -2012）：重启客户端即可续期（脚本 `get_cred()` 已处理）。
+- skey 过期（HTTP 401 / errcode -2012）：Windows 重新复制 `wr_skey`；macOS `main` 分支重启客户端续期。
 
 ## 书架同步
 
@@ -62,7 +64,7 @@ POST /shelf/deleteArchive
 
 | errcode | 含义 | 处理 |
 |---|---|---|
-| -2012 | 登录超时（skey 失效） | 重启客户端续期 |
+| -2012 | 登录超时（skey 失效） | 重新获取 skey（Windows 复制 Cookie；macOS 重启客户端） |
 | -2013 | 鉴权失败 | 凭据错误，重新提取 |
 | -2003 | 参数缺失/无效 | 检查请求体 |
 | -2014 | 请求过频 | 增大延迟，退避重试 |

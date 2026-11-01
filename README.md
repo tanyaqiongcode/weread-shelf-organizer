@@ -1,11 +1,16 @@
-# weread-shelf-organizer
+# weread-shelf-organizer-windows
 
-微信读书书架自动整理 Skill — 让 AI 帮你把书架整理得井井有条。
+微信读书书架自动整理 Skill — Windows / 跨平台版（Cookie 凭据）。
 
-[![tests](https://github.com/tanyaqiongcode/weread-shelf-organizer/actions/workflows/test.yml/badge.svg)](https://github.com/tanyaqiongcode/weread-shelf-organizer/actions/workflows/test.yml)
+[![tests](https://github.com/tanyaqiongcode/weread-shelf-organizer/actions/workflows/test.yml/badge.svg?branch=windows)](https://github.com/tanyaqiongcode/weread-shelf-organizer/actions/workflows/test.yml)
 
-一个 [ZCode](https://zcode.ai) / Claude Code 风格的 Agent Skill：通过本机微信读书 Mac 客户端的
-登录凭据调用其书架接口，实现**分组的自动创建、书籍的批量归类、迁移后的自动核验**。
+> 这是 Mac 版 [weread-shelf-organizer `main` 分支](https://github.com/tanyaqiongcode/weread-shelf-organizer/tree/main)
+> 的 Windows 派生分支。Windows 上通过浏览器 Cookie 提供凭据，**不依赖微信读书 Mac 客户端**；
+> 需要 Mac 自动提取客户端日志，请使用 `main` 分支。
+
+一个 [ZCode](https://zcode.ai) / Claude Code 风格的 Agent Skill：通过 `WEREAD_COOKIE`
+（或 `WEREAD_VID` / `WEREAD_SKEY`）提供登录凭据调用书架接口，实现**分组的自动创建、
+书籍的批量归类、迁移后的自动核验**。
 
 ![demo](docs/demo.gif)
 
@@ -38,68 +43,82 @@
 
 ### 1. 前置条件
 
-- **macOS**：微信读书 Mac 客户端（App Store 安装，登录一次即可）— 凭据自动提取
-- **Linux / Windows / CI**：设环境变量 `WEREAD_VID` / `WEREAD_SKEY`（可选 `WEREAD_V`）提供凭据
-- python3（仅标准库，无第三方依赖）
-- ZCode / Claude Code 等 Agent 环境（复制本目录到技能目录），或直接手动调用脚本
+- **Windows 10/11**（也可在 Linux / macOS 使用 Cookie 方式）
+- Python 3.9+（仅标准库，无第三方依赖）
+- 已登录微信读书网页版（用于获取 `wr_vid` / `wr_skey`）
+- ZCode / Claude Code 等 Agent 环境，或直接手动调用脚本
+- **不需要** 微信读书 Mac 客户端
 
 ### 2. 安装为 Skill
 
-```bash
-# ZCode
-git clone https://github.com/tanyaqiongcode/weread-shelf-organizer.git \
-  ~/.agents/skills/weread-shelf-organizer
+```powershell
+# ZCode（Windows PowerShell）
+git clone -b windows https://github.com/tanyaqiongcode/weread-shelf-organizer.git "$env:USERPROFILE\.agents\skills\weread-shelf-organizer-windows"
 
-# Claude Code
-git clone https://github.com/tanyaqiongcode/weread-shelf-organizer.git \
-  ~/.claude/skills/weread-shelf-organizer
+# Claude Code（Windows PowerShell）
+git clone -b windows https://github.com/tanyaqiongcode/weread-shelf-organizer.git "$env:USERPROFILE\.claude\skills\weread-shelf-organizer-windows"
 ```
 
 然后对 AI 说：
 
 > 帮我把微信读书书架按这份表格整理一下 / 帮我整理微信读书书架的新书
 
-### 3. 手动使用（不用 Agent 也行）
+### 3. 凭据（Windows 必读）
 
-```bash
+1. 浏览器打开 <https://weread.qq.com> 并扫码登录。
+2. 按 F12 → Application / 存储 → Cookies → `https://weread.qq.com`，复制 `wr_vid` 与 `wr_skey`。
+3. 在当前 PowerShell 会话设置 Cookie 并验证：
+
+```powershell
+$env:WEREAD_COOKIE = 'wr_vid=你的vid; wr_skey=你的skey'
+python scripts\weread_shelf.py creds
+```
+
+也可分开设置 `$env:WEREAD_VID` / `$env:WEREAD_SKEY`（可选 `$env:WEREAD_V`）。
+
+- `wr_skey` 是会话密钥，会过期；遇到 HTTP 401 重新复制即可。
+- 环境变量仅对当前窗口有效，新开窗口需重新设置。**不要把 Cookie 写入仓库或截图分享。**
+- 可选兜底：设置 `WEREAD_LOG_DIR` 指向微信读书 Windows 客户端日志目录，复用日志提取逻辑。
+  该路径尚未在 Windows 实机验证，不作为默认方式。
+
+### 4. 手动使用（不用 Agent 也行）
+
+```powershell
 # 方式 A: pip 安装（提供 weread-shelf 全局命令, requires-python >= 3.9）
-pip install git+https://github.com/tanyaqiongcode/weread-shelf-organizer.git
+pip install "git+https://github.com/tanyaqiongcode/weread-shelf-organizer.git@windows"
 
 # pip 安装只包含 CLI, 不含 examples/; 先下载示例规则再按需修改
-curl -LO https://raw.githubusercontent.com/tanyaqiongcode/weread-shelf-organizer/main/examples/rules.example.json
+curl.exe -LO https://raw.githubusercontent.com/tanyaqiongcode/weread-shelf-organizer/windows/examples/rules.example.json
 
 weread-shelf creds
 weread-shelf plan --rules rules.example.json -o plan.json --dry-run
 weread-shelf apply --plan plan.json
 ```
 
-```bash
-# 方式 B: 克隆后从 scripts 目录运行
-cd scripts
-
-python3 weread_shelf.py creds                    # 验证凭据（自动启动客户端）
-python3 weread_shelf.py plan \
-    --rules ../examples/rules.example.json \
-    -o plan.json --dry-run                       # 生成整理计划
-python3 weread_shelf.py apply --plan plan.json   # 执行迁移 + 核验
-python3 weread_shelf.py groups --purge-empty     # 清理空分组
+```powershell
+# 方式 B: 克隆后在仓库根目录运行
+python scripts\weread_shelf.py creds                    # 验证 Cookie/环境变量
+python scripts\weread_shelf.py plan --rules examples\rules.example.json -o plan.json --dry-run
+python scripts\weread_shelf.py apply --plan plan.json   # 执行迁移 + 核验
+python scripts\weread_shelf.py groups --purge-empty     # 清理空分组
 ```
 
 **把指定旧分组打散重排（重组模式，双重确认）：**
 
-```bash
+```powershell
 # ① 基线 CSV + 白名单来源分组生成计划（只动白名单里的分组）
-python3 weread_shelf.py plan --rules examples/rules.example.json     --baseline my_base.csv     --source-group "探照灯好书小说2,豆瓣评分9.0以上的书籍"     --reorganize -o plan.json --dry-run
+python scripts\weread_shelf.py plan --rules examples\rules.example.json --baseline my_base.csv --source-group "探照灯好书小说2,豆瓣评分9.0以上的书籍" --reorganize -o plan.json --dry-run
 # ② 人工复核 plan.json 后确认执行（缺 --yes 会拒绝）
-python3 weread_shelf.py apply --plan plan.json --yes --json-report report.json
+python scripts\weread_shelf.py apply --plan plan.json --yes --json-report report.json
 ```
 
 分组规则见 `examples/rules.example.json`（12 分组示例 + 平台分类映射，改成分你自己的即可）。
 
 ## 🧠 工作原理
 
-1. **凭据**：脚本启动本机微信读书 Mac 客户端，从其本地日志提取 `vid/skey`
-   （只驻留内存，不落盘不回显）；skey 过期时自动重启客户端续期。
+1. **凭据**：从 `WEREAD_COOKIE`（`wr_vid` / `wr_skey`）或 `WEREAD_VID` / `WEREAD_SKEY`
+   读取，只驻留内存，不落盘不回显；如设置 `WEREAD_LOG_DIR`，可尝试从客户端日志提取。
+   Mac 自动提取客户端日志请使用 `main` 分支。
 2. **接口**：调用客户端同款官方接口 —— `/shelf/sync` 同步、`/shelf/archive` 建组/移书、
    `/shelf/deleteArchive` 删分组。明细见 [references/api.md](references/api.md)。
 3. **分类**：平台分类（如"经济理财-商业"）按规则映射到分组（完整命中置信度 0.95、
@@ -110,15 +129,15 @@ python3 weread_shelf.py apply --plan plan.json --yes --json-report report.json
 
 ## 🧪 测试
 
-```bash
-python3 -m unittest discover -s tests -v
+```powershell
+python -m unittest discover -s tests -v
 ```
 
-58 个离线回归测试（全 mock、无网络，有状态假书架模拟迁移后同步）：classify 元数一致性、
+62 个离线回归测试（全 mock、无网络，有状态假书架模拟迁移后同步）：classify 元数一致性、
 含待复核书的端到端 plan、置信度阈值分流、正确分组核验、重组白名单边界、执行前状态校验、
-核验失败非零退出、`--json-report` 结构化报告、环境变量凭据、批次切分、基线解析、
-删除前的 archiveId/空组二次核验、逐批原子检查点、非 401 中断报告、脱敏接口样例等。
-推送后由 GitHub Actions 自动执行。
+核验失败非零退出、`--json-report` 结构化报告、环境变量凭据、`WEREAD_COOKIE` 解析、
+批次切分、基线解析、删除前的 archiveId/空组二次核验、逐批原子检查点、非 401 中断报告、
+脱敏接口样例等。推送后由 GitHub Actions 在 Ubuntu + Windows 自动执行。
 
 `tests/fixtures/` 的脱敏响应样例用于锁定已知接口字段与安全分支；**它不能单独发现上游
 接口变化**，真实变化仍依赖每周 `sync` 与迁移后 `verify` 的显式报告。
@@ -143,6 +162,11 @@ moved/failed/stale/wrong 结果；报告每批原子更新，并带 `in_progress
 本项目调用微信读书客户端内部接口（非官方开放 API），接口可能随版本更新而变化。
 本项目按 [MIT](LICENSE) 许可开源（允许商用）；但接口非官方、账号风险自担，
 严禁用于批量注册、爬取、代练等滥用场景。使用产生的任何后果由使用者自行承担。
+
+## 来源
+
+派生自 [tanyaqiongcode/weread-shelf-organizer](https://github.com/tanyaqiongcode/weread-shelf-organizer/tree/main)
+（MIT）。`windows` 分支仅调整 Windows 凭据入口、平台提示与文档，迁移逻辑与安全红线保持一致。
 
 ## License
 

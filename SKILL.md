@@ -1,21 +1,23 @@
 ---
-name: weread-shelf-organizer
-description: 微信读书书架自动整理技能 — 书架重组（白名单确认）、增量归类、自动创建分组、清理旧分组与迁移核验。当用户要求整理微信读书书架、按表格/规则给书籍分类、创建书架分组、每周定期整理书架、把新书归档到分组时使用。需要 macOS + 已登录的微信读书 Mac 客户端。
+name: weread-shelf-organizer-windows
+description: 微信读书书架自动整理技能（Windows / 跨平台版）— 书架重组（白名单确认）、增量归类、自动创建分组、清理旧分组与迁移核验。当用户要求整理微信读书书架、按表格/规则给书籍分类、创建书架分组、每周定期整理书架、把新书归档到分组时使用。使用 WEREAD_COOKIE 或 WEREAD_VID/WEREAD_SKEY 凭据，不依赖 Mac 客户端。
 ---
 
-# 微信读书书架自动整理 (WeRead Shelf Organizer)
+# 微信读书书架自动整理 — Windows / 跨平台版 (WeRead Shelf Organizer)
 
-通过本机微信读书 Mac 客户端的登录凭据调用其官方书架接口，实现书架分组的批量整理：
+通过 `WEREAD_COOKIE`（推荐）或 `WEREAD_VID` / `WEREAD_SKEY` 提供登录凭据，调用官方书架接口，
+实现书架分组的批量整理：
 书架重组（按用户提供的分类表，仅限显式白名单分组）、增量归类（只整理新书/未分组书）、分组创建与清理、迁移后核验。
 
 ## 前置条件
 
-- macOS + 已登录的**微信读书 Mac 客户端**（App Store 版；平时无需保持打开，脚本会自动启动）
-- `python3`（标准库即可，无第三方依赖）
-- 本技能目录下的 `scripts/weread_shelf.py`
+- Windows 10/11（Linux / macOS 可用 Cookie 方式）+ Python 3.9+
+- 已登录微信读书网页版，设置 `WEREAD_COOKIE`（推荐）或 `WEREAD_VID` / `WEREAD_SKEY`
+- **不需要**微信读书 Mac 客户端；Mac 自动提取客户端日志请使用 `main` 分支
+- 本技能目录下的 `scripts/weread_shelf.py`（标准库即可，无第三方依赖）
 
 **开始前必须先调用 `weread_shelf.py` 的子命令完成凭据验证（见工作流第 1 步）。**
-凭据从客户端本地日志提取（vid/skey），只驻留内存，不落盘、不回显、不写入任何输出文件。
+凭据只驻留内存，不落盘、不回显、不写入任何输出文件。
 
 ## 核心约束（安全红线）
 
@@ -36,16 +38,16 @@ description: 微信读书书架自动整理技能 — 书架重组（白名单�
 ```bash
 S=scripts/weread_shelf.py
 
-python3 $S creds                      # 提取并验证凭据（失败→见"凭据失效"）
-python3 $S sync -o snapshot.json      # 书架快照
-python3 $S plan  --rules rules.json [--baseline base.csv] \
+python $S creds                      # 提取并验证凭据（失败→见"凭据失效"）
+python $S sync -o snapshot.json      # 书架快照
+python $S plan  --rules rules.json [--baseline base.csv] \
                  [--reorganize --source-group "旧榜单A,旧榜单B"] [-o plan.json] [--dry-run]
-python3 $S apply --plan plan.json [--yes] [--json-report report.json]
-python3 $S review --decisions d.json [--json-report report.json]
-python3 $S groups --list              # 列出分组
-python3 $S groups --create "01 成长学习"
-python3 $S groups --purge-empty       # 清理空分组
-python3 $S verify --plan plan.json    # 独立核验
+python $S apply --plan plan.json [--yes] [--json-report report.json]
+python $S review --decisions d.json [--json-report report.json]
+python $S groups --list              # 列出分组
+python $S groups --create "01 成长学习"
+python $S groups --purge-empty       # 清理空分组
+python $S verify --plan plan.json    # 独立核验
 ```
 
 ## 工作流
@@ -79,18 +81,20 @@ python3 $S verify --plan plan.json    # 独立核验
 ### 第 1 步：凭据验证
 
 ```bash
-python3 $S creds
+python $S creds
 ```
 
-**凭据失效**（stderr 出现 FATAL）：提示用户打开微信读书 Mac 客户端确认登录（必要时重新扫码），用户确认后重试。不要绕过、不要重试超过 2 次。
+**凭据失效**（stderr 出现 FATAL）：Windows 检查 `WEREAD_COOKIE` 或 `WEREAD_VID` / `WEREAD_SKEY`
+是否已设置、`wr_skey` 是否过期；过期后从网页版重新复制。不要绕过、不要重试超过 2 次。
 
-**无 Mac 客户端的环境**（Linux/Windows/CI）：可设环境变量 `WEREAD_VID` / `WEREAD_SKEY`
-（可选 `WEREAD_V`）提供凭据，脚本验证通过即用，无需客户端。
+**凭据来源**：Windows 推荐 `WEREAD_COOKIE="wr_vid=...; wr_skey=..."`；也可分开设置
+`WEREAD_VID` / `WEREAD_SKEY`（可选 `WEREAD_V`）。如设置 `WEREAD_LOG_DIR`，脚本会尝试
+从该目录的客户端日志提取（Windows 日志路径未实机验证，仅作可选兜底）。
 
 ### 第 2 步：生成计划
 
 ```bash
-python3 $S plan --rules rules.json -o plan.json --dry-run
+python $S plan --rules rules.json -o plan.json --dry-run
 ```
 
 产出 `plan.json`：
@@ -103,7 +107,7 @@ python3 $S plan --rules rules.json -o plan.json --dry-run
 **分组缺失时先创建**：
 
 ```bash
-python3 $S groups --create "01 成长学习"   # 逐个创建 missing_groups
+python $S groups --create "01 成长学习"   # 逐个创建 missing_groups
 ```
 
 ### 第 3 步：AI 复核定类
@@ -128,8 +132,8 @@ python3 $S groups --create "01 成长学习"   # 逐个创建 missing_groups
 ### 第 4 步：执行迁移
 
 ```bash
-python3 $S apply --plan plan.json        # 自动部分
-python3 $S review --decisions decisions.json   # 复核部分
+python $S apply --plan plan.json        # 自动部分
+python $S review --decisions decisions.json   # 复核部分
 ```
 
 脚本自动：40 本/批、失败重试 3 次、迁移后重新同步核验落位。
@@ -137,8 +141,8 @@ python3 $S review --decisions decisions.json   # 复核部分
 ### 第 5 步：收尾与报告
 
 ```bash
-python3 $S groups --purge-empty    # 可选：清理迁移后清空的旧分组（仅空分组）
-python3 $S verify --plan plan.json
+python $S groups --purge-empty    # 可选：清理迁移后清空的旧分组（仅空分组）
+python $S verify --plan plan.json
 ```
 
 向用户汇报（中文，简洁）：
@@ -163,12 +167,13 @@ python3 $S verify --plan plan.json
 | 2 | 凭据失效 |
 | 3 | 重组迁移未加 `--yes` 确认 |
 
-`apply`/`review` 支持 `--json-report 文件路径`，输出结构化
-`moved/failed/stale/wrong` 结果，供定时任务判断成败。
+`apply`/`review` 支持 `--json-report 文件路径`，输出结构化 `moved/failed/stale/wrong`；
+报告每批原子更新，并带 `in_progress` / `interrupted` / `error` 字段。定时任务应确认
+`in_progress: false`，并把 `interrupted: true` 或退出码 1 / 2 视为未成功。
 
 ## 参考文件
 
 - `references/api.md` — 接口明细、请求头、错误码、常见问题
 - `examples/rules.example.json` — 12 分组示例规则（可直接改用）
-- `tests/` — 离线回归测试（`python3 -m unittest discover -s tests`，全 mock 无网络）；
+- `tests/` — 离线回归测试（`python -m unittest discover -s tests`，全 mock 无网络）；
   改动分类/迁移逻辑后必须先跑通测试

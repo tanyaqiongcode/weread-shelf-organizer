@@ -234,6 +234,57 @@ class CredTests(unittest.TestCase):
         self.assertEqual(cm.exception.code, 2)
 
 
+class CookieCredTests(unittest.TestCase):
+    """Windows / Linux 凭据: WEREAD_COOKIE 解析与优先级。"""
+
+    def test_cookie_is_parsed_and_used_without_client(self):
+        env = {
+            "WEREAD_COOKIE": 'Cookie: wr_vid="12345678"; wr_skey="abcDEF12=="',
+        }
+        with (
+            mock.patch.dict("os.environ", env, clear=True),
+            mock.patch.object(W, "http_json", return_value={"errcode": 0}) as hj,
+            mock.patch.object(W, "extract_cred") as ex,
+        ):
+            cred = W.get_cred()
+        self.assertEqual(cred["vid"], "12345678")
+        self.assertEqual(cred["skey"], "abcDEF12==")
+        ex.assert_not_called()
+        self.assertEqual(hj.call_args.kwargs["hdrs"]["vid"], "12345678")
+
+    def test_incomplete_cookie_falls_back_to_explicit_env(self):
+        env = {"WEREAD_COOKIE": "wr_vid=12345678", "WEREAD_VID": "87654321", "WEREAD_SKEY": "xyz"}
+        with (
+            mock.patch.dict("os.environ", env, clear=True),
+            mock.patch.object(W, "http_json", return_value={"errcode": 0}),
+        ):
+            cred = W.get_cred()
+        self.assertEqual(cred["vid"], "87654321")
+        self.assertEqual(cred["skey"], "xyz")
+
+    def test_cookie_without_secret_is_rejected(self):
+        with mock.patch.dict("os.environ", {"WEREAD_COOKIE": "foo=bar"}, clear=True):
+            self.assertIsNone(W._cred_from_cookie("foo=bar"))
+            self.assertIsNone(W._cred_from_cookie("wr_vid=1; wr_skey="))
+
+    def test_non_macos_fatal_hint_mentions_cookie(self):
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            with (
+                mock.patch.dict("os.environ", {}, clear=True),
+                mock.patch.object(W.subprocess, "run", side_effect=FileNotFoundError(2, "no open")),
+                mock.patch.object(W, "LOG_DIR", Path(d)),
+                mock.patch.object(W, "http_json", side_effect=AssertionError("不应发请求")),
+                mock.patch.object(W.time, "sleep"),
+                mock.patch.object(W.sys, "platform", "win32"),
+                mock.patch("sys.stderr", err),
+            ):
+                with self.assertRaises(SystemExit) as cm:
+                    W.get_cred(retry=1)
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("WEREAD_COOKIE", err.getvalue())
+
+
 class MoveTests(unittest.TestCase):
     def test_batching_40_per_call(self):
         calls = []

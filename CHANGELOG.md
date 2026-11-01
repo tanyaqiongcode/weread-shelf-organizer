@@ -2,7 +2,16 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/) 规范，版本号遵循语义化版本。
 
-## [Unreleased]
+## [1.3.0] - 2026-11-01
+
+Windows / 跨平台派生版本，基于上游 `main` 的 P1/P2 安全加固。
+
+### 新增
+- **`WEREAD_COOKIE` 凭据**: 支持 `wr_vid` / `wr_skey` Cookie 字符串（允许引号与 `=`），
+  保留 `WEREAD_VID` / `WEREAD_SKEY` 与 `WEREAD_LOG_DIR` 兼容
+- **Windows 平台提示**: 非 macOS 凭据失败时给出 Cookie/环境变量指引；Windows 控制台输出
+  使用 UTF-8 容错，避免中文/emoji 编码异常
+- **CI**: 单测矩阵加入 `windows-latest`，与 Ubuntu 同时执行
 
 ### 安全
 - **删除分组前二次核验**: `groups --delete` / `--purge-empty` 不再信任启动时的快照,
@@ -21,7 +30,7 @@
 - `apply --dry-run` 不再获取凭据/启动客户端; `groups --list` 帮助文本与行为对齐
 
 ### 工程
-- 单测矩阵覆盖 Python 3.9 / 3.11 / 3.13; 测试 44 → 58 项
+- 单测矩阵覆盖 Python 3.9 / 3.11 / 3.13; 测试 44 → 62 项（新增 Cookie 解析与 Windows 提示）
 - 新增 `tests/fixtures/` 脱敏接口样例（sync/archive/deleteArchive/非 JSON），
   覆盖删除前复核、原子报告、逐批检查点与非 401 中断分支
 - README pip 安装说明补充示例规则下载; AGENTS.md 去除不存在的 scripts/plan.json、

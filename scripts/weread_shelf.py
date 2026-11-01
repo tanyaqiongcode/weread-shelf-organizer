@@ -58,6 +58,15 @@ def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def _configure_console():
+    """Windows 重定向输出时避免中文/emoji 因 GBK 编码报错。"""
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(Exception):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 # ---------------------------------------------------------------- 凭据
 def extract_cred():
     """启动 Mac 客户端, 从其本地日志提取 vid/skey(仅驻留内存)。"""
@@ -148,6 +157,33 @@ def _mask(vid):
     return f"{vid[:2]}****{vid[-2:]}" if vid and len(vid) > 4 else "****"
 
 
+def _cred_from_cookie(raw):
+    """从浏览器 Cookie 解析 wr_vid / wr_skey(兼容 vid/skey, 允许引号)。"""
+    raw = raw.strip()
+    if raw[:7].lower() == "cookie:":
+        raw = raw[7:]
+    values = {}
+    for part in raw.split(";"):
+        key, sep, value = part.strip().partition("=")
+        if not sep:
+            continue
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key in ("wr_vid", "vid") and "vid" not in values:
+            values["vid"] = value
+        elif key in ("wr_skey", "skey") and "skey" not in values:
+            values["skey"] = value
+    vid, skey = values.get("vid"), values.get("skey")
+    if not vid or not skey:
+        return None
+    return {
+        "vid": vid,
+        "skey": skey,
+        "v": os.environ.get("WEREAD_V", VER_DEFAULT),
+        "ua": UA_DEFAULT,
+    }
+
+
 def get_cred(retry=2):
     # 路径 1: 环境变量 (适用于无 Mac 客户端的环境, 如 Linux/CI, 凭据自行提取)
     vid, skey = os.environ.get("WEREAD_VID"), os.environ.get("WEREAD_SKEY")
@@ -169,7 +205,26 @@ def get_cred(retry=2):
         except (OSError, ValueError) as e:
             # URLError/超时/响应非 JSON: 不抛 traceback, 回退后统一以 FATAL + 退出码 2 结束
             log(f"环境变量凭据校验失败({type(e).__name__}), 回退到客户端日志提取")
-    # 路径 2: macOS 微信读书客户端日志 (自动启动客户端)
+    # 路径 2: 浏览器 Cookie (Windows / Linux 推荐; wr_skey 过期后需重新复制)
+    raw_cookie = os.environ.get("WEREAD_COOKIE")
+    if raw_cookie:
+        cookie_cred = _cred_from_cookie(raw_cookie)
+        if cookie_cred:
+            try:
+                http_json(
+                    f"{API}/shelf/sync?userFlag=0&synckey=&teenmode=0&album=1",
+                    hdrs=headers(cookie_cred),
+                )
+                log(f"凭据有效 (WEREAD_COOKIE, vid={_mask(cookie_cred['vid'])})")
+                return cookie_cred
+            except urllib.error.HTTPError as e:
+                log(f"WEREAD_COOKIE 凭据无效(HTTP {e.code}), 回退到客户端日志提取")
+            except (OSError, ValueError) as e:
+                log(f"WEREAD_COOKIE 校验失败({type(e).__name__}), 回退到客户端日志提取")
+        else:
+            log("WEREAD_COOKIE 未包含 wr_vid/wr_skey, 已忽略")
+    # 路径 3: macOS 微信读书客户端日志 (自动启动客户端)
+
     for attempt in range(retry):
         cred = extract_cred()
         if cred:
@@ -192,11 +247,14 @@ def get_cred(retry=2):
             if sys.platform != "darwin":
                 break  # 非 macOS 无客户端可等待, 直接给出 FATAL
             time.sleep(8)
-    print(
-        "FATAL: 无法获取有效凭据。请打开微信读书 Mac 客户端并确认已登录"
-        "(必要时重新扫码), 然后重试。",
-        file=sys.stderr,
-    )
+    if sys.platform == "darwin":
+        hint = "请打开微信读书 Mac 客户端并确认已登录(必要时重新扫码), 然后重试。"
+    else:
+        hint = (
+            '请设置 WEREAD_COOKIE="wr_vid=...; wr_skey=..." 或 '
+            "WEREAD_VID / WEREAD_SKEY; 如需读取客户端日志, 再设置 WEREAD_LOG_DIR。"
+        )
+    print(f"FATAL: 无法获取有效凭据。{hint}", file=sys.stderr)
     sys.exit(2)
 
 
@@ -867,6 +925,7 @@ def cmd_verify(args):
 
 
 def main():
+    _configure_console()
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
