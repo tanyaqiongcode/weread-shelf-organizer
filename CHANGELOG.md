@@ -30,7 +30,7 @@ Windows / 跨平台派生版本，基于上游 `main` 的 P1/P2 安全加固。
 - `apply --dry-run` 不再获取凭据/启动客户端; `groups --list` 帮助文本与行为对齐
 
 ### 工程
-- 单测矩阵覆盖 Python 3.9 / 3.11 / 3.13; 测试 44 → 62 项（新增 Cookie 解析与 Windows 提示）
+- 单测矩阵覆盖 Python 3.9 / 3.11 / 3.13; 测试 44 → 63 项（新增 Cookie 解析、Windows 提示与控制台编码）
 - 新增 `tests/fixtures/` 脱敏接口样例（sync/archive/deleteArchive/非 JSON），
   覆盖删除前复核、原子报告、逐批检查点与非 401 中断分支
 - README pip 安装说明补充示例规则下载; AGENTS.md 去除不存在的 scripts/plan.json、

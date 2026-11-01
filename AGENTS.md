@@ -11,7 +11,7 @@
 ```bash
 uvx ruff check . && uvx ruff format --check .    # lint（保持 0 问题）
 uvx mypy .                                       # 类型检查（保持 0 错误）
-python -m unittest discover -s tests             # 62 个离线回归测试，必须全绿
+python -m unittest discover -s tests             # 63 个离线回归测试，必须全绿
 pre-commit run --all-files                       # 提交前全量自检
 ```
 

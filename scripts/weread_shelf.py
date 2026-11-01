@@ -67,6 +67,10 @@ def _configure_console():
             stream.reconfigure(encoding="utf-8", errors="replace")
 
 
+# 导入时即配置: 测试/脚本可能直接调用 cmd_*, 不经过 main()
+_configure_console()
+
+
 # ---------------------------------------------------------------- 凭据
 def extract_cred():
     """启动 Mac 客户端, 从其本地日志提取 vid/skey(仅驻留内存)。"""

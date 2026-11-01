@@ -267,6 +267,24 @@ class CookieCredTests(unittest.TestCase):
             self.assertIsNone(W._cred_from_cookie("foo=bar"))
             self.assertIsNone(W._cred_from_cookie("wr_vid=1; wr_skey="))
 
+    def test_configure_console_forces_utf8_on_windows(self):
+        class FakeStream:
+            def __init__(self):
+                self.kwargs = None
+
+            def reconfigure(self, **kwargs):
+                self.kwargs = kwargs
+
+        out, err = FakeStream(), FakeStream()
+        with (
+            mock.patch.object(W.sys, "platform", "win32"),
+            mock.patch.object(W.sys, "stdout", out),
+            mock.patch.object(W.sys, "stderr", err),
+        ):
+            W._configure_console()
+        self.assertEqual(out.kwargs, {"encoding": "utf-8", "errors": "replace"})
+        self.assertEqual(err.kwargs, {"encoding": "utf-8", "errors": "replace"})
+
     def test_non_macos_fatal_hint_mentions_cookie(self):
         err = io.StringIO()
         with tempfile.TemporaryDirectory() as d:
