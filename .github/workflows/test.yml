@@ -11,8 +11,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.9 = pyproject requires-python 下限; 3.11 = lint/类型检查基准版本
-        python-version: ["3.9", "3.11", "3.13"]
+        # 3.11 = lint/类型检查基准版本。3.9 曾是 requires-python 下限，但
+        # ubuntu-26.04 runner 镜像已不再提供（3.9 于 2025-10 EOL）；本脚本
+        # 纯 stdlib 且无 3.10+ 语法，requires-python >=3.9 的声明保留，
+        # CI 改为验证 3.11 / 3.13。
+        python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
