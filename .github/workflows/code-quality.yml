@@ -1,5 +1,6 @@
 # 工程规范 CI：密钥扫描 + lint/format/类型检查。
 # 既有单测工作流见同目录 test.yml（unittest），本文件不与其合并、互不影响。
+# 文件名与工作流名对齐（原 tests.yml 与 test.yml 仅差一个字母，极易混淆）。
 name: code-quality
 
 on:
